@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# uv
+.uv/
+
+# LinkedIn MCP session — never commit credentials
+session.json
+browser-profile/
+
+# macOS
+.DS_Store
