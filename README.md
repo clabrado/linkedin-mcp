@@ -41,7 +41,7 @@ claude mcp add-json --scope user linkedin '{
 }'
 ```
 
-Replace `/path/to/linkedin-mcp/linkedin_mcp.py` with the actual path and `your@email.com` with your LinkedIn login email.
+Replace `/path/to/linkedin-mcp/linkedin_mcp.py` and `your@email.com` with your actual values.
 
 ### 4. Authenticate
 
@@ -59,7 +59,7 @@ A Chrome window opens, pre-filled with your email. Complete password/MFA. The br
 
 | Variable | Required | Description |
 |---|---|---|
-| `LI_EMAIL` | Recommended | Pre-fills the login email in the browser window. Not required but saves a step. |
+| `LI_EMAIL` | Recommended | Pre-fills the login email in the browser window. |
 
 ---
 
@@ -101,7 +101,7 @@ Returns: { valid, name, member_id, expires_in_seconds }
 ```
 
 #### `whoami`
-Get the authenticated user's profile. Reads from session cache (populated by `browser_login`); attempts live API call first and falls back to cache.
+Get the authenticated user's profile. Attempts live API call first; falls back to session cache.
 
 ```
 Returns: { name, headline, member_id, profile_urn, profile_url, source }
@@ -126,8 +126,9 @@ Args:
   keywords        str   — name, title, skills, company
   count           int   — results to return (default 10, max 49)
   start           int   — pagination offset
-  title_filter    str   — optional job title filter
-  company_filter  str   — optional company name filter
+  title_filter    str   — optional job title filter (LinkedIn title facet)
+  company_filter  str   — current company: name(s) or numeric LinkedIn company ID(s), comma-separated
+  past_company_filter str — past company: name(s) or numeric ID(s), comma-separated
   location_filter str   — optional location filter
 
 Returns: { count, start, results: [{ urn, name, headline, company, location, profile_url }] }
@@ -383,7 +384,7 @@ Returns: { name, industry, employee_count, employee_growth, headquarters,
 
 ### Pre-call research
 ```
-search_people(keywords="John Smith Acme") 
+search_people(keywords="John Smith Acme")
 → get_person_posts(profile_id="johnsmith", count=5)
 → get_profile(profile_id="johnsmith")
 → [Claude drafts meeting brief]
@@ -421,21 +422,23 @@ get_feed(count=20)
 ## Technical Notes
 
 - **Voyager API**: LinkedIn's unofficial internal REST/GraphQL API. Endpoints may drift with LinkedIn releases. If httpx-based tools (search, profile, messaging) start returning 403/400, re-run `browser_login` to refresh the CSRF token.
+- **Search endpoint (2026-10)**: `/voyager/api/search/blended` was retired (404). All search tools now use the GraphQL `voyagerSearchDashClusters` query. Pages are 10 hits; free accounts that hit LinkedIn's monthly *commercial use limit* get only ~3 hits per page (the API mirrors what the web UI shows).
+- **Profile endpoint (2026-10)**: `identity/profiles/{id}/profileView` was retired (410 Gone). `get_profile`, `send_message` and `sales_navigator_save_lead` now resolve via `identity/dash/profiles?q=memberIdentity`.
+
+## Session refresh (2026-10)
+
+LinkedIn can invalidate a harvested `li_at` long before the 30-day TTL in `session.json` expires. The server now treats a Voyager **401 as "stale session"**, not "retry with the same file":
+
+1. `_get` / `_post` on 401 → `_refresh_session()` — drops the in-memory and on-disk session, then runs a **headless re-harvest** from `~/.cache/linkedin-mcp/browser-profile/` (the persisted SSO cookies) and saves a new `session.json`.
+2. `token_status` performs a **live** `GET /me` check (not just the TTL) and auto-refreshes the same way. It returns `live` and `refreshed` flags; `valid=false` means the browser profile itself is signed out and an interactive `browser_login` is required.
+3. Playwright is pinned to `>=1.60,<1.61` so the script keeps using the Chromium build already installed (`chromium-1223`). Bump the pin and run `playwright install chromium` together.
+
+Known limitation: a harvested session can still be revoked by LinkedIn within minutes of heavy API use (seen 2026-10-26). When that happens the browser profile is signed out too and only `browser_login` recovers it.
+
 - **Feed + person posts**: Use Playwright DOM extraction (~10s per call) — the old REST feed endpoint is deprecated.
-- **CSRF**: Captured directly from intercepted Voyager API request headers during `browser_login`. Not derived, not guessed.
+- **CSRF**: Captured directly from intercepted Voyager API request headers during `browser_login`.
 - **httpx.Client**: Used (not bare `httpx.get`) so cookies persist correctly across any redirect hops LinkedIn issues.
 - **Sales Navigator**: Uses `https://www.linkedin.com/sales-api/` — same session, separate endpoint namespace.
-
----
-
-## .gitignore
-
-Add to your `.gitignore`:
-
-```
-# LinkedIn MCP — never commit session credentials
-~/.cache/linkedin-mcp/
-```
 
 ---
 
